@@ -5,7 +5,6 @@
 #  TODO: ADD support for the following:
 # Add jitter
 # Add LED functionality
-
 import re
 import time
 import random
@@ -14,7 +13,6 @@ from digitalio import DigitalInOut, Pull
 from adafruit_debouncer import Debouncer
 import board
 from board import *
-import pwmio
 import asyncio
 import usb_hid
 from adafruit_hid.keyboard import Keyboard
@@ -38,6 +36,24 @@ def _numOn():
 
 def _scrollOn():
     return kbd.led_on(Keyboard.LED_SCROLL_LOCK)
+
+def pressLock(key):
+    kbd.press(key)
+    kbd.release(key)
+
+def SaveKeyboardLedState():
+    variables["$_INITIAL_SCROLLLOCK"] = _scrollOn()
+    variables["$_INITIAL_NUMLOCK"] = _numOn()
+    variables   ["$_INITIAL_CAPSLOCK"] = _capsOn()
+
+
+def RestoreKeyboardLedState():
+    if(variables["$_INITIAL_CAPSLOCK"] != _capsOn()):
+        pressLock(Keycode.CAPS_LOCK)
+    if(variables["$_INITIAL_NUMLOCK"] != _numOn()):
+        pressLock(Keycode.NUM_LOCK)
+    if(variables["$_INITIAL_SCROLLLOCK"] != _scrollOn()):
+        pressLock(Keycode.SCROLL_LOCK)
 
 duckyKeys = {
     'WINDOWS': Keycode.GUI, 'RWINDOWS': Keycode.RIGHT_GUI, 'GUI': Keycode.GUI, 'RGUI': Keycode.RIGHT_GUI, 'COMMAND': Keycode.GUI, 'RCOMMAND': Keycode.RIGHT_GUI,
@@ -71,7 +87,7 @@ duckyConsumerKeys = {
     'MK_PP': ConsumerControlCode.PLAY_PAUSE, 'MK_STOP': ConsumerControlCode.STOP
 }
 
-variables = {"$_RANDOM_MIN": 0, "$_RANDOM_MAX": 65535}
+variables = {"$_RANDOM_MIN": 0, "$_RANDOM_MAX": 65535,"$_EXFIL_MODE_ENABLED": False,"$_EXFIL_LEDS_ENABLED": False,"$_INITIAL_SCROLLLOCK": False, "$_INITIAL_NUMLOCK": False, "$_INITIAL_CAPSLOCK": False}
 internalVariables = {"$_CAPSLOCK_ON": _capsOn, "$_NUMLOCK_ON": _numOn, "$_SCROLLLOCK_ON": _scrollOn}
 defines = {}
 functions = {}
@@ -181,6 +197,9 @@ def evaluateExpression(expression):
     expression = expression.replace("&&", "and")
     expression = expression.replace("||", "or")
 
+    expression = expression.replace("TRUE", "True")
+    expression = expression.replace("FALSE", "False")
+
     return eval(expression, {}, variables)
 
 def deepcopy(List):
@@ -238,7 +257,7 @@ def replaceDefines(line):
         line = line.replace(define, value)
     return line
 
-def parseLine(line, script_lines):
+async def parseLine(line, script_lines):
     global defaultDelay, variables, functions, defines
     line = line.strip()
     line = line.replace("$_RANDOM_INT", str(random.randint(int(variables.get("$_RANDOM_MIN", 0)), int(variables.get("$_RANDOM_MAX", 65535)))))
@@ -257,6 +276,7 @@ def parseLine(line, script_lines):
         commandKeycode = duckyKeys.get(key, None)
         if commandKeycode:
             kbd.press(commandKeycode)
+
         else:
             print(f"Unknown key to HOLD: <{key}>")
     elif line.startswith("RELEASE"):
@@ -403,6 +423,17 @@ def parseLine(line, script_lines):
             sendString(random.choice(letters + letters.upper() + numbers + specialChars))
     elif line == "RESET":
         kbd.release_all()
+    elif line == "SAVE_HOST_KEYBOARD_LOCK_STATE":
+        SaveKeyboardLedState()
+    elif line == "RESTORE_HOST_KEYBOARD_LOCK_STATE":
+        RestoreKeyboardLedState()
+    elif line == "WAIT_FOR_SCROLL_CHANGE":
+        last_scroll_state = _scrollOn()
+        while True: 
+            current_scroll_state = _scrollOn()
+            if current_scroll_state != last_scroll_state:
+                break
+            await asyncio.sleep(0.01)
     elif line in functions:
         updated_lines = []
         inside_while_block = False
@@ -454,7 +485,7 @@ def getProgrammingStatus():
 
 defaultDelay = 0
 
-def runScript(file):
+async def runScript(file):
     global defaultDelay
 
     duckyScriptPath = file
@@ -479,7 +510,7 @@ def runScript(file):
                         restart = False
                         break
                     else:
-                        parseLine(line, script_lines)
+                        await parseLine(line, script_lines)
                         previousLine = line
                     time.sleep(float(defaultDelay) / 1000)
     except OSError as e:
@@ -524,45 +555,53 @@ async def blink_led(led):
     elif(board.board_id == 'raspberry_pi_pico_w' or board.board_id == 'raspberry_pi_pico2_w'):
         blink_pico_w_led(led)
 
+
 async def blink_pico_led(led):
     print("starting blink_pico_led")
     led_state = False
     while True:
-        if led_state:
-            #led_pwm_up(led)
-            #print("led up")
-            for i in range(100):
-                # PWM LED up and down
-                if i < 50:
-                    led.duty_cycle = int(i * 2 * 65535 / 100)  # Up
-                await asyncio.sleep(0.01)
-            led_state = False
+        if(variables.get("$_EXFIL_LEDS_ENABLED")):
+            led.duty_cycle = 65535
         else:
-            #led_pwm_down(led)
-            #print("led down")
-            for i in range(100):
-                # PWM LED up and down
-                if i >= 50:
-                    led.duty_cycle = 65535 - int((i - 50) * 2 * 65535 / 100)  # Down
-                await asyncio.sleep(0.01)
-            led_state = True
+            if led_state:
+                #led_pwm_up(led)
+                #print("led up")
+                for i in range(100):
+                    # PWM LED up and down
+                    if i < 50:
+                        led.duty_cycle = int(i * 2 * 65535 / 100)  # Up
+                    await asyncio.sleep(0.01)
+                led_state = False
+            else:
+                #led_pwm_down(led)
+                #print("led down")
+                for i in range(100):
+                    # PWM LED up and down
+                    if i >= 50:
+                        led.duty_cycle = 65535 - int((i - 50) * 2 * 65535 / 100)  # Down
+                    await asyncio.sleep(0.01)
+                led_state = True
         await asyncio.sleep(0)
 
 async def blink_pico_w_led(led):
     print("starting blink_pico_w_led")
     led_state = False
     while True:
-        if led_state:
-            #print("led on")
+        if(variables.get("$_EXFIL_LEDS_ENABLED")):
             led.value = 1
+        else: 
+            if led_state:
+                #print("led on")
+                led.value = 1
+                await asyncio.sleep(0.5)
+                led_state = False
+            else:
+                #print("led off")
+                led.value = 0
+                await asyncio.sleep(0.5)
+                led_state = True
             await asyncio.sleep(0.5)
-            led_state = False
-        else:
-            #print("led off")
-            led.value = 0
-            await asyncio.sleep(0.5)
-            led_state = True
-        await asyncio.sleep(0.5)
+
 
 async def monitor_buttons(button1):
     global inBlinkeyMode, inMenu, enableRandomBeep, enableSirenMode,pixel
@@ -588,8 +627,51 @@ async def monitor_buttons(button1):
                 # Run selected payload
                 payload = selectPayload()
                 print("Running ", payload)
-                runScript(payload)
+                await runScript(payload)
                 print("Done")
             button1Down = False
 
         await asyncio.sleep(0)
+
+async def monitor_led_changes():
+    print("starting monitor_led_changes")
+
+    while True:
+        if variables.get("$_EXFIL_MODE_ENABLED"):
+            try:
+                bit_list = []
+                last_caps_state = _capsOn()
+                last_num_state = _numOn()
+                last_scroll_state = _scrollOn()
+
+                with open("loot.bin", "ab") as file:
+                    while variables.get("$_EXFIL_MODE_ENABLED"):
+                        caps_state = _capsOn()
+                        num_state = _numOn()
+                        scroll_state = _scrollOn()
+
+                        if caps_state != last_caps_state:
+                            bit_list.append(0)
+                            last_caps_state = caps_state 
+
+                        elif num_state != last_num_state:
+                            bit_list.append(1)
+                            last_num_state = num_state
+
+                        if len(bit_list) == 8:
+                            byte = 0
+                            for b in bit_list:
+                                byte = (byte << 1) | b
+                            file.write(bytes([byte]))
+                            bit_list = []
+
+                        if scroll_state != last_scroll_state:
+                            variables["$_EXFIL_LEDS_ENABLED"] = False
+                            break            
+                        
+                        await asyncio.sleep(0.001)
+            except Exception as e:
+                print(f"Error occurred: {e}")
+
+        await asyncio.sleep(0.0)
+
