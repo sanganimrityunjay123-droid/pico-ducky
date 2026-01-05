@@ -19,6 +19,9 @@ from adafruit_hid.keyboard import Keyboard
 from adafruit_hid.consumer_control import ConsumerControl
 from adafruit_hid.consumer_control_code import ConsumerControlCode
 
+#value of delay between individual keystrokes in miliseconds change value as per need based on target machine
+defaultDelay = 0
+
 # comment out these lines for non_US keyboards
 from adafruit_hid.keyboard_layout_us import KeyboardLayoutUS as KeyboardLayout
 from adafruit_hid.keycode import Keycode
@@ -483,7 +486,7 @@ def getProgrammingStatus():
     return(progStatus)
 
 
-defaultDelay = 0
+
 
 async def runScript(file):
     global defaultDelay
